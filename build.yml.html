@@ -1,0 +1,283 @@
+name: Build SHADOW TUNNEL
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.9'
+      - name: Generer le projet
+        run: |
+          set -e
+          mkdir -p ST/app/src/main/java/com/example/shadowtunnel ST/app/src/main/assets ST/app/src/main/res/mipmap-xxhdpi
+          cat > ST/settings.gradle <<'EOF_FILE_1'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "ShadowTunnel"
+          include ':app'
+          EOF_FILE_1
+          cat > ST/build.gradle <<'EOF_FILE_2'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          EOF_FILE_2
+          cat > ST/gradle.properties <<'EOF_FILE_3'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF_FILE_3
+          cat > ST/app/build.gradle <<'EOF_FILE_4'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.example.shadowtunnel'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.example.shadowtunnel'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.13.1'
+              implementation 'androidx.activity:activity-ktx:1.9.1'
+              implementation 'androidx.webkit:webkit:1.11.0'
+          }
+          EOF_FILE_4
+          cat > ST/app/src/main/AndroidManifest.xml <<'EOF_FILE_5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="SHADOW TUNNEL"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_FILE_5
+          cat > ST/app/src/main/java/com/example/shadowtunnel/MainActivity.kt <<'EOF_FILE_6'
+          package com.example.shadowtunnel
+
+          import android.annotation.SuppressLint
+          import android.content.ActivityNotFoundException
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.webkit.JavascriptInterface
+          import android.webkit.ValueCallback
+          import android.webkit.WebChromeClient
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebResourceResponse
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import androidx.activity.ComponentActivity
+          import androidx.activity.OnBackPressedCallback
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.webkit.WebViewAssetLoader
+          import org.json.JSONObject
+          import java.net.InetSocketAddress
+          import java.net.Socket
+
+          class MainActivity : ComponentActivity() {
+
+              private lateinit var web: WebView
+              private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+              private val chooserLauncher =
+                  registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                      val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+                      filePathCallback?.onReceiveValue(uris)
+                      filePathCallback = null
+                  }
+
+              inner class Bridge {
+                  @JavascriptInterface
+                  fun openUrl(url: String) {
+                      val uri = Uri.parse(url)
+                      if (uri.scheme != "http" && uri.scheme != "https") return
+                      runOnUiThread {
+                          try {
+                              startActivity(Intent(Intent.ACTION_VIEW, uri))
+                          } catch (e: ActivityNotFoundException) {
+                          }
+                      }
+                  }
+
+                  @JavascriptInterface
+                  fun shareText(text: String) {
+                      runOnUiThread {
+                          val send = Intent(Intent.ACTION_SEND).apply {
+                              type = "text/plain"
+                              putExtra(Intent.EXTRA_TEXT, text)
+                          }
+                          startActivity(Intent.createChooser(send, "Partager"))
+                      }
+                  }
+
+                  // Mesure le temps d'ouverture d'une connexion TCP vers host:port.
+                  @JavascriptInterface
+                  fun ping(id: String, host: String, port: Int) {
+                      if (host.isBlank() || port !in 1..65535) return
+                      Thread {
+                          var ms = -1L
+                          try {
+                              val start = System.nanoTime()
+                              Socket().use { it.connect(InetSocketAddress(host, port), 4000) }
+                              ms = (System.nanoTime() - start) / 1_000_000
+                          } catch (e: Exception) {
+                              ms = -1L
+                          }
+                          val js = "window.onPing(" + JSONObject.quote(id) + "," + ms + ")"
+                          runOnUiThread { web.evaluateJavascript(js, null) }
+                      }.start()
+                  }
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val loader = WebViewAssetLoader.Builder()
+                      .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+                      .build()
+
+                  web = WebView(this)
+                  setContentView(web)
+
+                  web.settings.javaScriptEnabled = true
+                  web.settings.domStorageEnabled = true
+                  web.settings.allowFileAccess = false
+                  web.settings.allowContentAccess = true
+                  web.addJavascriptInterface(Bridge(), "Android")
+
+                  web.webViewClient = object : WebViewClient() {
+                      override fun shouldInterceptRequest(
+                          view: WebView,
+                          request: WebResourceRequest
+                      ): WebResourceResponse? = loader.shouldInterceptRequest(request.url)
+
+                      override fun shouldOverrideUrlLoading(
+                          view: WebView,
+                          request: WebResourceRequest
+                      ): Boolean {
+                          if (request.url.host == "appassets.androidplatform.net") return false
+                          val scheme = request.url.scheme
+                          if (scheme == "http" || scheme == "https") {
+                              try {
+                                  startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                              } catch (e: ActivityNotFoundException) {
+                              }
+                          }
+                          return true
+                      }
+                  }
+
+                  web.webChromeClient = object : WebChromeClient() {
+                      override fun onShowFileChooser(
+                          webView: WebView,
+                          callback: ValueCallback<Array<Uri>>,
+                          params: FileChooserParams
+                      ): Boolean {
+                          filePathCallback?.onReceiveValue(null)
+                          filePathCallback = callback
+                          return try {
+                              chooserLauncher.launch(params.createIntent())
+                              true
+                          } catch (e: ActivityNotFoundException) {
+                              filePathCallback?.onReceiveValue(null)
+                              filePathCallback = null
+                              false
+                          }
+                      }
+                  }
+
+                  onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+                      override fun handleOnBackPressed() {
+                          web.evaluateJavascript("(window.onAndroidBack && window.onAndroidBack())") { r ->
+                              if (r != "true") {
+                                  isEnabled = false
+                                  onBackPressedDispatcher.onBackPressed()
+                              }
+                          }
+                      }
+                  })
+
+                  if (savedInstanceState == null) {
+                      web.loadUrl("https://appassets.androidplatform.net/assets/shadow_tunnel.html")
+                  } else {
+                      web.restoreState(savedInstanceState)
+                  }
+              }
+
+              override fun onSaveInstanceState(outState: Bundle) {
+                  super.onSaveInstanceState(outState)
+                  web.saveState(outState)
+              }
+
+              override fun onDestroy() {
+                  web.destroy()
+                  super.onDestroy()
+              }
+          }
+          EOF_FILE_6
+          base64 -d > ST/app/src/main/res/mipmap-xxhdpi/ic_launcher.png <<'EOF_ICON'
+          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
+          EOF_ICON
+          test -f shadow_tunnel.html || (echo 'shadow_tunnel.html manquant a la racine du depot' && exit 1)
+          cp shadow_tunnel.html ST/app/src/main/assets/shadow_tunnel.html
+      - name: Compiler
+        working-directory: ST
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShadowTunnel-apk
+          path: ST/app/build/outputs/apk/debug/app-debug.apk
